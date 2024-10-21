@@ -597,8 +597,12 @@ class OpenAILargeLanguageModel(_CommonOpenAI, LargeLanguageModel):
 
         if tools:
             # extra_model_kwargs['tools'] = [helper.dump_model(PromptMessageFunction(function=tool)) for tool in tools]
-            extra_model_kwargs["functions"] = [
-                {"name": tool.name, "description": tool.description, "parameters": tool.parameters} for tool in tools
+            # extra_model_kwargs["functions"] = [
+            #    {"name": tool.name, "description": tool.description, "parameters": tool.parameters} for tool in tools
+            # ]
+            extra_model_kwargs['tools'] = [
+                {"type": "function", "function": {"name": tool.name, "description": tool.description, "parameters": tool.parameters}} 
+                for tool in tools
             ]
 
         if stop:
@@ -624,10 +628,15 @@ class OpenAILargeLanguageModel(_CommonOpenAI, LargeLanguageModel):
 
             if "stop" in extra_model_kwargs:
                 del extra_model_kwargs["stop"]
-
+  
+        # 将 prompt_messages 转换为字典列表
+        messages = [self._convert_prompt_message_to_dict(m) for m in prompt_messages]
+        
+        # 输出转换后的 messages
+        logger.info(f"Messages sent to OpenAI API: {json.dumps(messages, ensure_ascii=False, indent=2)}")
         # chat model
         response = client.chat.completions.create(
-            messages=[self._convert_prompt_message_to_dict(m) for m in prompt_messages],
+            messages=messages,
             model=model,
             stream=stream,
             **model_parameters,
@@ -698,13 +707,14 @@ class OpenAILargeLanguageModel(_CommonOpenAI, LargeLanguageModel):
         :return: llm response
         """
         assistant_message = response.choices[0].message
-        # assistant_message_tool_calls = assistant_message.tool_calls
-        assistant_message_function_call = assistant_message.function_call
+
+        assistant_message_tool_calls = assistant_message.tool_calls
+        # assistant_message_function_call = assistant_message.function_call
 
         # extract tool calls from response
-        # tool_calls = self._extract_response_tool_calls(assistant_message_tool_calls)
-        function_call = self._extract_response_function_call(assistant_message_function_call)
-        tool_calls = [function_call] if function_call else []
+        tool_calls = self._extract_response_tool_calls(assistant_message_tool_calls)
+        # function_call = self._extract_response_function_call(assistant_message_function_call)
+        # tool_calls = [function_call] if function_call else []
 
         # transform assistant message to prompt message
         assistant_prompt_message = AssistantPromptMessage(content=assistant_message.content, tool_calls=tool_calls)
@@ -741,33 +751,18 @@ class OpenAILargeLanguageModel(_CommonOpenAI, LargeLanguageModel):
         prompt_messages: list[PromptMessage],
         tools: Optional[list[PromptMessageTool]] = None,
     ) -> Generator:
-        """
-        Handle llm chat stream response
-
-        :param model: model name
-        :param response: response
-        :param prompt_messages: prompt messages
-        :param tools: tools for tool calling
-        :return: llm response chunk generator
-        """
         full_assistant_content = ""
-        delta_assistant_message_function_call_storage: ChoiceDeltaFunctionCall = None
         prompt_tokens = 0
         completion_tokens = 0
-        final_tool_calls = []
-        final_chunk = LLMResultChunk(
-            model=model,
-            prompt_messages=prompt_messages,
-            delta=LLMResultChunkDelta(
-                index=0,
-                message=AssistantPromptMessage(content=""),
-            ),
-        )
+        tool_calls_in_progress = {}
+        completed_tool_calls = []
+
+        logger.info(f"Starting stream response handling for model: {model}")
 
         for chunk in response:
+            logger.info(f"Parse chunk:{chunk}")
             if len(chunk.choices) == 0:
                 if chunk.usage:
-                    # calculate num tokens
                     prompt_tokens = chunk.usage.prompt_tokens
                     completion_tokens = chunk.usage.completion_tokens
                 continue
@@ -775,83 +770,100 @@ class OpenAILargeLanguageModel(_CommonOpenAI, LargeLanguageModel):
             delta = chunk.choices[0]
             has_finish_reason = delta.finish_reason is not None
 
-            if (
-                not has_finish_reason
-                and (delta.delta.content is None or delta.delta.content == "")
-                and delta.delta.function_call is None
-            ):
+            if not has_finish_reason and delta.delta.content is None and delta.delta.tool_calls is None:
                 continue
 
-            # assistant_message_tool_calls = delta.delta.tool_calls
-            assistant_message_function_call = delta.delta.function_call
+            assistant_message_tool_calls = delta.delta.tool_calls
 
-            # extract tool calls from response
-            if delta_assistant_message_function_call_storage is not None:
-                # handle process of stream function call
-                if assistant_message_function_call:
-                    # message has not ended ever
-                    delta_assistant_message_function_call_storage.arguments += assistant_message_function_call.arguments
+            if assistant_message_tool_calls:
+                logger.info(f"Received tool calls in chunk: {assistant_message_tool_calls}")
+                for tool_call in assistant_message_tool_calls:
+                    if tool_call.index not in tool_calls_in_progress:
+                        tool_calls_in_progress[tool_call.index] = {
+                            "id": tool_call.id or "",
+                            "type": tool_call.type or "function",
+                            "function": {"name": "", "arguments": ""}
+                        }
+                        logger.info(f"New tool call initiated: {tool_call.index}")
+                    
+                    if tool_call.function.name:
+                        tool_calls_in_progress[tool_call.index]["function"]["name"] = tool_call.function.name
+                    if tool_call.function.arguments:
+                        tool_calls_in_progress[tool_call.index]["function"]["arguments"] += tool_call.function.arguments
+
+                    logger.debug(f"Updated tool call {tool_call.index}: {tool_calls_in_progress[tool_call.index]}")
+
+                    # 检查这个 tool call 是否完成
+                    if tool_calls_in_progress[tool_call.index]["function"]["name"] and \
+                       tool_calls_in_progress[tool_call.index]["function"]["arguments"].strip().endswith('}'):
+                        completed_tool_call = AssistantPromptMessage.ToolCall(
+                            id=tool_calls_in_progress[tool_call.index]["id"],
+                            type=tool_calls_in_progress[tool_call.index]["type"],
+                            function=AssistantPromptMessage.ToolCall.ToolCallFunction(
+                                name=tool_calls_in_progress[tool_call.index]["function"]["name"],
+                                arguments=tool_calls_in_progress[tool_call.index]["function"]["arguments"]
+                            )
+                        )
+                        completed_tool_calls.append(completed_tool_call)
+                        logger.info(f"Tool call completed: {completed_tool_call}")
+                        del tool_calls_in_progress[tool_call.index]
+                if not has_finish_reason:
                     continue
-                else:
-                    # message has ended
-                    assistant_message_function_call = delta_assistant_message_function_call_storage
-                    delta_assistant_message_function_call_storage = None
-            else:
-                if assistant_message_function_call:
-                    # start of stream function call
-                    delta_assistant_message_function_call_storage = assistant_message_function_call
-                    if delta_assistant_message_function_call_storage.arguments is None:
-                        delta_assistant_message_function_call_storage.arguments = ""
-                    if not has_finish_reason:
-                        continue
 
-            # tool_calls = self._extract_response_tool_calls(assistant_message_tool_calls)
-            function_call = self._extract_response_function_call(assistant_message_function_call)
-            tool_calls = [function_call] if function_call else []
-            if tool_calls:
-                final_tool_calls.extend(tool_calls)
+            content = delta.delta.content or ""
+            full_assistant_content += content
 
-            # transform assistant message to prompt message
-            assistant_prompt_message = AssistantPromptMessage(content=delta.delta.content or "", tool_calls=tool_calls)
+            assistant_prompt_message = AssistantPromptMessage(content=content, tool_calls=completed_tool_calls)
 
-            full_assistant_content += delta.delta.content or ""
+            logger.debug(f"Yielding LLMResultChunk: content='{content}', tool_calls={completed_tool_calls}")
+            yield LLMResultChunk(
+                model=chunk.model,
+                prompt_messages=prompt_messages,
+                system_fingerprint=chunk.system_fingerprint,
+                delta=LLMResultChunkDelta(
+                    index=delta.index,
+                    message=assistant_prompt_message,
+                    finish_reason=delta.finish_reason if has_finish_reason else None,
+                ),
+            )
 
-            if has_finish_reason:
-                final_chunk = LLMResultChunk(
-                    model=chunk.model,
-                    prompt_messages=prompt_messages,
-                    system_fingerprint=chunk.system_fingerprint,
-                    delta=LLMResultChunkDelta(
-                        index=delta.index,
-                        message=assistant_prompt_message,
-                        finish_reason=delta.finish_reason,
-                    ),
+        # 处理可能未完成的 tool calls
+        for tool_call in tool_calls_in_progress.values():
+            if tool_call["function"]["name"] and tool_call["function"]["arguments"]:
+                completed_tool_call = AssistantPromptMessage.ToolCall(
+                    id=tool_call["id"],
+                    type=tool_call["type"],
+                    function=AssistantPromptMessage.ToolCall.ToolCallFunction(
+                        name=tool_call["function"]["name"],
+                        arguments=tool_call["function"]["arguments"]
+                    )
                 )
-            else:
-                yield LLMResultChunk(
-                    model=chunk.model,
-                    prompt_messages=prompt_messages,
-                    system_fingerprint=chunk.system_fingerprint,
-                    delta=LLMResultChunkDelta(
-                        index=delta.index,
-                        message=assistant_prompt_message,
-                    ),
-                )
+                completed_tool_calls.append(completed_tool_call)
+                logger.info(f"Incomplete tool call completed: {completed_tool_call}")
+
+        logger.info(f"End of stream response handling. Total completed tool calls: {len(completed_tool_calls)}")
 
         if not prompt_tokens:
             prompt_tokens = self._num_tokens_from_messages(model, prompt_messages, tools)
 
         if not completion_tokens:
             full_assistant_prompt_message = AssistantPromptMessage(
-                content=full_assistant_content, tool_calls=final_tool_calls
+                content=full_assistant_content, tool_calls=completed_tool_calls
             )
             completion_tokens = self._num_tokens_from_messages(model, [full_assistant_prompt_message])
 
-        # transform usage
         usage = self._calc_response_usage(model, credentials, prompt_tokens, completion_tokens)
-        final_chunk.delta.usage = usage
 
-        yield final_chunk
+        logger.info("Final yield: usage")
+        yield LLMResultChunk(
+            model=model,
+            prompt_messages=prompt_messages,
+            delta=LLMResultChunkDelta(
+                index=0,
+                message=AssistantPromptMessage(content=""),
+                usage=usage
+            ),
+        )
 
     def _extract_response_tool_calls(
         self, response_tool_calls: list[ChatCompletionMessageToolCall | ChoiceDeltaToolCall]
@@ -865,14 +877,15 @@ class OpenAILargeLanguageModel(_CommonOpenAI, LargeLanguageModel):
         tool_calls = []
         if response_tool_calls:
             for response_tool_call in response_tool_calls:
-                function = AssistantPromptMessage.ToolCall.ToolCallFunction(
-                    name=response_tool_call.function.name, arguments=response_tool_call.function.arguments
-                )
+                if response_tool_call.function.name:
+                 function = AssistantPromptMessage.ToolCall.ToolCallFunction(
+                     name=response_tool_call.function.name, arguments=response_tool_call.function.arguments
+                 )
 
-                tool_call = AssistantPromptMessage.ToolCall(
-                    id=response_tool_call.id, type=response_tool_call.type, function=function
-                )
-                tool_calls.append(tool_call)
+                 tool_call = AssistantPromptMessage.ToolCall(
+                     id=response_tool_call.id, type=response_tool_call.type, function=function
+                 )
+                 tool_calls.append(tool_call)
 
         return tool_calls
 
@@ -969,24 +982,20 @@ class OpenAILargeLanguageModel(_CommonOpenAI, LargeLanguageModel):
             message = cast(AssistantPromptMessage, message)
             message_dict = {"role": "assistant", "content": message.content}
             if message.tool_calls:
-                # message_dict["tool_calls"] = [tool_call.dict() for tool_call in
-                #                               message.tool_calls]
-                function_call = message.tool_calls[0]
-                message_dict["function_call"] = {
-                    "name": function_call.function.name,
-                    "arguments": function_call.function.arguments,
-                }
+                 message_dict["tool_calls"] = [tool_call.dict() for tool_call in
+                                               message.tool_calls]
         elif isinstance(message, SystemPromptMessage):
             message = cast(SystemPromptMessage, message)
             message_dict = {"role": "system", "content": message.content}
         elif isinstance(message, ToolPromptMessage):
             message = cast(ToolPromptMessage, message)
-            # message_dict = {
-            #     "role": "tool",
-            #     "content": message.content,
-            #     "tool_call_id": message.tool_call_id
-            # }
-            message_dict = {"role": "function", "content": message.content, "name": message.tool_call_id}
+            message_dict = {
+                 "role": "tool",
+                 "content": message.content,
+                 "tool_call_id": message.tool_call_id,
+                 "name": message.name
+            }
+   
         else:
             raise ValueError(f"Got unknown type {message}")
 
@@ -1022,11 +1031,12 @@ class OpenAILargeLanguageModel(_CommonOpenAI, LargeLanguageModel):
         """Calculate num tokens for gpt-3.5-turbo and gpt-4 with tiktoken package.
 
         Official documentation: https://github.com/openai/openai-cookbook/blob/main/examples/How_to_format_inputs_to_ChatGPT_models.ipynb"""
+
         if model.startswith("ft:"):
             model = model.split(":")[1]
 
         # Currently, we can use gpt4o to calculate chatgpt-4o-latest's token.
-        if model == "chatgpt-4o-latest" or model.startswith("o1"):
+        if model == "chatgpt-4o-latest" or model.startswith("kimi"):
             model = "gpt-4o"
 
         try:
@@ -1041,7 +1051,7 @@ class OpenAILargeLanguageModel(_CommonOpenAI, LargeLanguageModel):
             tokens_per_message = 4
             # if there's a name, the role is omitted
             tokens_per_name = -1
-        elif model.startswith("gpt-3.5-turbo") or model.startswith("gpt-4") or model.startswith("o1"):
+        elif model.startswith("gpt-4") or model.startswith("o1"):
             tokens_per_message = 3
             tokens_per_name = 1
         else:
