@@ -39,8 +39,8 @@ def summarize_project(project_path, output_file):
 
 def main():
     # 在这里直接指定项目路径和输出文件
-    project_path = '/Users/mango/work/Dify/dify/web'
-    output_file = '/Users/mango/work/Dify/dify/web/project_summary.txt'
+    project_path = '/Users/mango/work/Dify/dify/api'
+    output_file = '/Users/mango/work/Dify/dify/api/pro_api.txt'
 
     if not os.path.exists(project_path):
         print(f"错误: 项目路径 '{project_path}' 不存在")

@@ -390,6 +390,7 @@ const TextGeneration: FC<IMainProps> = ({
       setVisionConfig({
         ...file_upload.image,
         image_file_size_limit: appParams?.system_parameters?.image_file_size_limit,
+        fileUploadConfig: appParams?.system_parameters,
       })
       const prompt_variables = userInputsFormToPromptVariables(user_input_form)
       setPromptConfig({
@@ -407,7 +408,7 @@ const TextGeneration: FC<IMainProps> = ({
       if (canReplaceLogo)
         document.title = `${siteInfo.title}`
       else
-        document.title = `${siteInfo.title} - Powered by Dify`
+        document.title = `${siteInfo.title} - YaoIDK`
     }
   }, [siteInfo?.title, canReplaceLogo])
 

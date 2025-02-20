@@ -49,7 +49,7 @@ const Chatbot = () => {
       if (customConfig)
         document.title = `${site.title}`
       else
-        document.title = `${site.title} - Powered by Dify`
+        document.title = `${site.title} - YaoIDK`
     }
   }, [site, customConfig, themeBuilder])
 
@@ -124,6 +124,7 @@ const EmbeddedChatbotWrapper = () => {
     conversationList,
     showConfigPanelBeforeChat,
     newConversationInputs,
+    newConversationInputsRef,
     handleNewConversationInputsChange,
     inputsForms,
     handleNewConversation,
@@ -151,6 +152,7 @@ const EmbeddedChatbotWrapper = () => {
     conversationList,
     showConfigPanelBeforeChat,
     newConversationInputs,
+    newConversationInputsRef,
     handleNewConversationInputsChange,
     inputsForms,
     handleNewConversation,

@@ -32,7 +32,7 @@ COPY pyproject.toml poetry.lock ./
 # 添加这一行，先安装问题包
 #RUN pip install --no-cache-dir duckduckgo-search==6.2.11b1
 
-RUN poetry install --sync --no-cache --no-root
+RUN poetry install --sync  --no-root
 
 # production stage
 FROM base AS production
@@ -52,18 +52,22 @@ ENV TZ=UTC
 
 WORKDIR /app/api
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        curl \
-        nodejs \
-        libgmp-dev \
-        libmpfr-dev \
-        libmpc-dev \
-        zlib1g \
-        expat \
-        libldap-2.5-0 \
-        perl \
-        libsqlite3-0 \
+
+RUN apt-get update --fix-missing \
+    && apt-get install -y --no-install-recommends curl nodejs libgmp-dev libmpfr-dev libmpc-dev \
+    # if you located in China, you can use aliyun mirror to speed up
+    # && echo "deb http://mirrors.aliyun.com/debian testing main" > /etc/apt/sources.list \
+    && echo "deb http://deb.debian.org/debian testing main" > /etc/apt/sources.list \
+    && apt-get update \
+    # For Security
+    && apt-get install -y --no-install-recommends expat libldap-2.5-0 perl libsqlite3-0=3.46.1-1 \
+    && if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
+        apt-get install -y --no-install-recommends zlib1g=1:1.3.dfsg+really1.3.1-1+b1; \
+    else \
+        apt-get install -y --no-install-recommends zlib1g; \
+    fi \
+    # install a chinese font to support the use of tools like matplotlib
+    && apt-get install -y fonts-noto-cjk \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 

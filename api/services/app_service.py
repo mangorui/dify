@@ -26,15 +26,18 @@ from tasks.remove_app_and_related_data_task import remove_app_and_related_data_t
 
 
 class AppService:
-    def get_paginate_apps(self, tenant_id: str, args: dict) -> Pagination | None:
+
+    def get_paginate_apps(self, tenant_id: str, args: dict) -> Pagination | dict:
         """
         Get app list with pagination
         :param tenant_id: tenant id
         :param args: request args
-        :return:
+        :return: Pagination object for db query or dict for template mode
         """
-        filters = [App.tenant_id == tenant_id, App.is_universal == False]
 
+        # 原有的数据库查询逻辑
+        filters = [App.tenant_id == tenant_id, App.is_universal == False]
+        
         if args["mode"] == "workflow":
             filters.append(App.mode.in_([AppMode.WORKFLOW.value, AppMode.COMPLETION.value]))
         elif args["mode"] == "chat":
@@ -53,7 +56,7 @@ class AppService:
                 filters.append(App.id.in_(target_ids))
             else:
                 return None
-
+        
         app_models = db.paginate(
             db.select(App).where(*filters).order_by(App.created_at.desc()),
             page=args["page"],
@@ -367,3 +370,5 @@ class AppService:
                         meta["tool_icons"][tool_name] = {"background": "#252525", "content": "\ud83d\ude01"}
 
         return meta
+
+    

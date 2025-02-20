@@ -6,8 +6,11 @@ from werkzeug.exceptions import BadRequest, Forbidden, abort
 
 from controllers.console import api
 from controllers.console.app.wraps import get_app_model
-from controllers.console.setup import setup_required
-from controllers.console.wraps import account_initialization_required, cloud_edition_billing_resource_check
+from controllers.console.wraps import (
+    account_initialization_required,
+    cloud_edition_billing_resource_check,
+    setup_required,
+)
 from core.ops.ops_trace_manager import OpsTraceManager
 from fields.app_fields import (
     app_detail_fields,
@@ -18,7 +21,7 @@ from libs.login import login_required
 from services.app_dsl_service import AppDslService
 from services.app_service import AppService
 
-ALLOW_CREATE_APP_MODES = ["chat", "agent-chat", "advanced-chat", "workflow", "completion"]
+ALLOW_CREATE_APP_MODES = ["chat", "agent-chat", "advanced-chat", "workflow", "completion", "template"]
 
 
 class AppListApi(Resource):
@@ -49,10 +52,10 @@ class AppListApi(Resource):
         parser.add_argument("tag_ids", type=uuid_list, location="args", required=False)
 
         args = parser.parse_args()
-
         # get app list
         app_service = AppService()
         app_pagination = app_service.get_paginate_apps(current_user.current_tenant_id, args)
+        
         if not app_pagination:
             return {"data": [], "total": 0, "page": 1, "limit": 20, "has_more": False}
 
@@ -83,7 +86,6 @@ class AppListApi(Resource):
 
         app_service = AppService()
         app = app_service.create_app(current_user.current_tenant_id, args, current_user)
-
         return app, 201
 
 

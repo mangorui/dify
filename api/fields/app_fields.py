@@ -110,16 +110,21 @@ app_pagination_fields = {
 }
 
 template_fields = {
+    "id": fields.Integer,
     "name": fields.String,
-    "icon": fields.String,
-    "icon_background": fields.String,
-    "description": fields.String,
-    "mode": fields.String,
-    "model_config": fields.Nested(model_config_fields),
+    "category": fields.String,
+    "content": fields.String,
+    "user_id": fields.String,
+    "tenant_id": fields.String,
+    "create_time": fields.String
 }
 
 template_list_fields = {
-    "data": fields.List(fields.Nested(template_fields)),
+    "page": fields.Integer,
+    "limit": fields.Integer(attribute="per_page"),
+    "total": fields.Integer,
+    "has_more": fields.Boolean(attribute="has_next"),
+    "data": fields.List(fields.Nested(template_fields), attribute="items")
 }
 
 site_fields = {
